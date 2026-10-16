@@ -1,0 +1,16 @@
+{
+  "name": "approval-system",
+  "main": "./_worker.js",
+  "compatibility_date": "2026-10-16",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "approval-db",
+      "database_id": "98caa664-8494-4113-bbbe-e2e920c9a611"
+    }
+  ]
+}
