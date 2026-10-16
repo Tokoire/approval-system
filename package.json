@@ -1,0 +1,7 @@
+{
+  "name": "dual-approval-system",
+  "version": "1.1.0",
+  "description": "双端在线申请审批系统：蔡朋成提交，李佳恒审批",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" }
+}

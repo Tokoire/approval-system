@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>审批端｜李佳恒</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container">
+      <div class="brand"><div class="logo">审</div><div>在线申请审批系统</div></div>
+      <div class="user"><span class="role">审批方</span><div class="avatar">李</div><strong>李佳恒</strong></div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <h1>申请审核工作台</h1>
+      <p>查看蔡朋成提交的申请，填写审核理由并选择“审核通过”或“审核不通过”。</p>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="card-header"><h2>申请列表</h2><p>优先显示待审批申请，每 3 秒自动刷新。</p></div>
+        <div class="card-body"><div id="stats" class="status-counts"></div><div class="divider"></div><div id="applicationList" class="list"></div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h2>审核详情</h2><p>选择左侧申请后进行审核。</p></div>
+        <div class="card-body" id="detailArea"><div class="empty">请选择一条申请</div></div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" class="toast"></div>
+
+<script>
+let selectedId = null;
+let cache = [];
+const listEl = document.getElementById('applicationList');
+const detailEl = document.getElementById('detailArea');
+const statsEl = document.getElementById('stats');
+const toastEl = document.getElementById('toast');
+function toast(msg){ toastEl.textContent=msg; toastEl.classList.add('show'); setTimeout(()=>toastEl.classList.remove('show'),2200); }
+function statusText(s){ return s==='pending'?'待审批':s==='approved'?'已通过':'未通过'; }
+function fmt(t){ return t?new Date(t).toLocaleString('zh-CN',{hour12:false}):'-'; }
+function esc(s=''){ return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+
+async function loadApplications(){
+  try {
+    const res = await fetch('/api/applications');
+    cache = await res.json();
+    cache.sort((a,b) => (a.status==='pending'?0:1)-(b.status==='pending'?0:1) || new Date(b.createdAt)-new Date(a.createdAt));
+    renderStats(cache); renderList(cache);
+    if(selectedId){ const current=cache.find(x=>x.id===selectedId); if(current) renderDetail(current); }
+  } catch { listEl.innerHTML='<div class="empty">暂时无法连接服务器</div>'; }
+}
+function renderStats(items){
+  const p=items.filter(x=>x.status==='pending').length, a=items.filter(x=>x.status==='approved').length, r=items.filter(x=>x.status==='rejected').length;
+  statsEl.innerHTML=`<div class="stat"><strong>${p}</strong><span>待审批</span></div><div class="stat"><strong>${a}</strong><span>已通过</span></div><div class="stat"><strong>${r}</strong><span>未通过</span></div>`;
+}
+function renderList(items){
+  if(!items.length){ listEl.innerHTML='<div class="empty">暂无申请</div>'; return; }
+  listEl.innerHTML=items.map(x=>`<div class="item ${x.id===selectedId?'active':''}" onclick="selectItem('${x.id}')"><div class="item-top"><div><h3>${esc(x.title)}</h3><div class="meta">${esc(x.displayId)} · ${esc(x.category)}<br>${fmt(x.createdAt)}</div></div><span class="badge ${x.status}">${statusText(x.status)}</span></div></div>`).join('');
+}
+function selectItem(id){ selectedId=id; renderList(cache); const x=cache.find(i=>i.id===id); if(x) renderDetail(x); }
+function renderDetail(x){
+  const canReview=x.status==='pending';
+  detailEl.innerHTML=`
+    <div class="detail-grid">
+      <div class="k">申请编号</div><div class="v"><strong>${esc(x.displayId)}</strong></div>
+      <div class="k">申请人</div><div class="v">${esc(x.applicant)}</div>
+      <div class="k">标题</div><div class="v">${esc(x.title)}</div>
+      <div class="k">类型</div><div class="v">${esc(x.category)}</div>
+      <div class="k">紧急程度</div><div class="v">${esc(x.urgency)}</div>
+      <div class="k">联系方式</div><div class="v">${esc(x.contact || '未填写')}</div>
+      <div class="k">提交时间</div><div class="v">${fmt(x.createdAt)}</div>
+      <div class="k">当前状态</div><div class="v"><span class="badge ${x.status}">${statusText(x.status)}</span></div>
+      <div class="k">申请内容</div><div class="v">${esc(x.details)}</div>
+    </div>
+    <div class="divider"></div>
+    ${canReview ? `
+      <div class="field"><label for="feedback">审核理由 *</label><textarea id="feedback" maxlength="2000" placeholder="请填写通过或不通过的具体理由，申请方将看到此反馈。"></textarea></div>
+      <div class="actions"><button class="btn btn-success" onclick="review('approved')">审核通过</button><button class="btn btn-danger" onclick="review('rejected')">审核不通过</button></div>
+      <p class="small">审批完成后不可重复修改，避免产生冲突记录。</p>
+    ` : `
+      <div class="feedback-box"><strong>审批结果：</strong>${statusText(x.status)}<br><strong>审核理由：</strong>${esc(x.feedback)}<br><strong>审批时间：</strong>${fmt(x.reviewedAt)}</div>
+    `}
+    <div class="divider"></div>
+    <h3 style="margin-top:0">流程记录</h3>
+    <div class="timeline">${x.timeline.map(t=>`<div class="timeline-row"><div class="dot"></div><div><strong>${esc(t.actor)}</strong> · ${fmt(t.at)}<div class="meta">${esc(t.note)}</div></div></div>`).join('')}</div>`;
+}
+async function review(decision){
+  if(!selectedId) return;
+  const feedback=document.getElementById('feedback')?.value.trim();
+  if(!feedback){ toast('请先填写审核理由'); return; }
+  const label=decision==='approved'?'通过':'不通过';
+  if(!confirm(`确定将该申请审核为“${label}”吗？`)) return;
+  const res=await fetch('/api/applications/'+selectedId+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision,feedback})});
+  const data=await res.json();
+  if(!res.ok){ toast(data.message||'审核失败'); return; }
+  toast(`审核完成：${label}`); await loadApplications();
+}
+loadApplications(); setInterval(loadApplications,3000);
+</script>
+</body>
+</html>

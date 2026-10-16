@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>申请端｜蔡朋成</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container">
+      <div class="brand"><div class="logo">申</div><div>在线申请审批系统</div></div>
+      <div class="user"><span class="role">申请方</span><div class="avatar">蔡</div><strong>蔡朋成</strong></div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <h1>提交新的申请</h1>
+      <p>申请将实时发送至审批方李佳恒。提交后可在右侧查看当前状态及审批反馈。</p>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="card-header"><h2>申请信息</h2><p>请尽量完整描述申请事项，便于快速审核。</p></div>
+        <div class="card-body">
+          <form id="applyForm">
+            <div class="field"><label for="title">申请标题 *</label><input id="title" maxlength="120" placeholder="例如：活动经费报销申请" required /></div>
+            <div class="row">
+              <div class="field"><label for="category">申请类型 *</label><select id="category" required><option value="">请选择</option><option>经费申请</option><option>物资申请</option><option>活动申请</option><option>请假申请</option><option>权限申请</option><option>其他申请</option></select></div>
+              <div class="field"><label for="urgency">紧急程度</label><select id="urgency"><option>普通</option><option>较急</option><option>紧急</option></select></div>
+            </div>
+            <div class="field"><label for="contact">联系方式 / 补充信息</label><input id="contact" maxlength="120" placeholder="可填写手机号、邮箱或其他联系信息" /></div>
+            <div class="field"><label for="details">申请内容 *</label><textarea id="details" maxlength="3000" placeholder="请填写申请背景、原因、具体需求及必要说明……" required></textarea></div>
+            <div class="actions"><button class="btn btn-primary" type="submit">提交申请</button><button class="btn btn-ghost" type="reset">清空</button></div>
+          </form>
+          <div class="divider"></div>
+          <div class="note">系统会记录提交时间、审批结果和审核理由。当前版本为固定申请人“蔡朋成”和固定审批人“李佳恒”。</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h2>我的申请记录</h2><p>状态每 3 秒自动刷新，也可以点击记录查看详细信息。</p></div>
+        <div class="card-body">
+          <div id="stats" class="status-counts"></div>
+          <div class="divider"></div>
+          <div id="applicationList" class="list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" class="toast"></div>
+
+<script>
+const listEl = document.getElementById('applicationList');
+const statsEl = document.getElementById('stats');
+const toastEl = document.getElementById('toast');
+
+function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(() => toastEl.classList.remove('show'), 2200); }
+function statusText(s){ return s==='pending'?'待审批':s==='approved'?'已通过':'未通过'; }
+function fmt(t){ return new Date(t).toLocaleString('zh-CN',{hour12:false}); }
+function esc(s=''){ return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+
+async function loadApplications(){
+  try {
+    const res = await fetch('/api/applications');
+    const items = await res.json();
+    renderStats(items);
+    renderList(items);
+  } catch { listEl.innerHTML = '<div class="empty">暂时无法连接服务器</div>'; }
+}
+function renderStats(items){
+  const p=items.filter(x=>x.status==='pending').length, a=items.filter(x=>x.status==='approved').length, r=items.filter(x=>x.status==='rejected').length;
+  statsEl.innerHTML = `<div class="stat"><strong>${items.length}</strong><span>全部申请</span></div><div class="stat"><strong>${p}</strong><span>待审批</span></div><div class="stat"><strong>${a}</strong><span>已通过</span></div><div class="stat"><strong>${r}</strong><span>未通过</span></div>`;
+}
+function renderList(items){
+  if(!items.length){ listEl.innerHTML='<div class="empty">还没有申请记录</div>'; return; }
+  listEl.innerHTML = items.map(x => `<div class="item" onclick="showDetail('${x.id}')"><div class="item-top"><div><h3>${esc(x.title)}</h3><div class="meta">${esc(x.displayId)} · ${esc(x.category)} · ${fmt(x.createdAt)}</div></div><span class="badge ${x.status}">${statusText(x.status)}</span></div>${x.feedback?`<div class="feedback-box" style="margin-top:12px"><strong>审批反馈：</strong>${esc(x.feedback)}</div>`:''}</div>`).join('');
+}
+async function showDetail(id){
+  const res=await fetch('/api/applications/'+id); const x=await res.json();
+  const msg = `申请编号：${x.displayId}\n标题：${x.title}\n类型：${x.category}\n紧急程度：${x.urgency}\n状态：${statusText(x.status)}\n提交时间：${fmt(x.createdAt)}${x.reviewedAt?'\n审批时间：'+fmt(x.reviewedAt):''}\n\n申请内容：\n${x.details}${x.feedback?'\n\n审批理由：\n'+x.feedback:''}`;
+  alert(msg);
+}
+
+document.getElementById('applyForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const body = { title:title.value, category:category.value, urgency:urgency.value, contact:contact.value, details:details.value };
+  const res = await fetch('/api/applications', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+  const data = await res.json();
+  if(!res.ok){ toast(data.message || '提交失败'); return; }
+  e.target.reset(); toast(`申请 ${data.displayId} 已提交`); loadApplications();
+});
+
+loadApplications();
+setInterval(loadApplications, 3000);
+</script>
+</body>
+</html>
