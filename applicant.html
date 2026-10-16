@@ -16,6 +16,10 @@
 
   <main class="container">
     <section class="hero">
+      <div class="love-counter" aria-live="polite">
+        <span class="heart">♥</span>
+        <div><div class="love-label">今天是爱老公的</div><strong id="loveDays">第 0 天</strong><div class="love-since">从 2026 年 9 月 30 日开始</div></div>
+      </div>
       <h1>提交新的申请</h1>
       <p>申请将实时发送至审批方李佳恒。提交后可在右侧查看当前状态及审批反馈。</p>
     </section>
@@ -27,20 +31,28 @@
           <form id="applyForm">
             <div class="field"><label for="title">申请标题 *</label><input id="title" maxlength="120" placeholder="例如：活动经费报销申请" required /></div>
             <div class="row">
-              <div class="field"><label for="category">申请类型 *</label><select id="category" required><option value="">请选择</option><option>经费申请</option><option>物资申请</option><option>活动申请</option><option>请假申请</option><option>权限申请</option><option>其他申请</option></select></div>
+              <div class="field"><label for="category">申请类型 *</label><select id="category" required><option value="">正在加载申请类型…</option></select></div>
               <div class="field"><label for="urgency">紧急程度</label><select id="urgency"><option>普通</option><option>较急</option><option>紧急</option></select></div>
             </div>
             <div class="field"><label for="contact">联系方式 / 补充信息</label><input id="contact" maxlength="120" placeholder="可填写手机号、邮箱或其他联系信息" /></div>
             <div class="field"><label for="details">申请内容 *</label><textarea id="details" maxlength="3000" placeholder="请填写申请背景、原因、具体需求及必要说明……" required></textarea></div>
-            <div class="actions"><button class="btn btn-primary" type="submit">提交申请</button><button class="btn btn-ghost" type="reset">清空</button></div>
+
+            <div class="field">
+              <label for="imageInput">申请图片（可选，最多 3 张）</label>
+              <input id="imageInput" class="file-input" type="file" accept="image/*" multiple />
+              <p class="small">图片会在本机自动压缩后上传，可直接用 iPhone / iPad 相册选择。</p>
+              <div id="imagePreview" class="image-preview-grid"></div>
+            </div>
+
+            <div class="actions"><button class="btn btn-primary" type="submit" id="submitBtn">提交申请</button><button class="btn btn-ghost" type="reset">清空</button></div>
           </form>
           <div class="divider"></div>
-          <div class="note">系统会记录提交时间、审批结果和审核理由。当前版本为固定申请人“蔡朋成”和固定审批人“李佳恒”。</div>
+          <div class="note">系统会记录提交时间、审批结果、审核理由和已上传图片。当前版本为固定申请人“蔡朋成”和固定审批人“李佳恒”。</div>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-header"><h2>我的申请记录</h2><p>状态每 3 秒自动刷新，也可以点击记录查看详细信息。</p></div>
+        <div class="card-header"><h2>我的申请记录</h2><p>状态每 3 秒自动刷新，也可以点击记录查看详细信息和图片。</p></div>
         <div class="card-body">
           <div id="stats" class="status-counts"></div>
           <div class="divider"></div>
@@ -49,21 +61,62 @@
       </div>
     </section>
   </main>
+
+  <div id="detailModal" class="modal" aria-hidden="true">
+    <div class="modal-backdrop" onclick="closeModal()"></div>
+    <div class="modal-panel">
+      <button class="modal-close" onclick="closeModal()" aria-label="关闭">×</button>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+  <div id="imageLightbox" class="lightbox" onclick="closeImage()"><img id="lightboxImage" alt="申请图片预览" /></div>
   <div id="toast" class="toast"></div>
 
 <script>
 const listEl = document.getElementById('applicationList');
 const statsEl = document.getElementById('stats');
 const toastEl = document.getElementById('toast');
+const categoryEl = document.getElementById('category');
+const imageInput = document.getElementById('imageInput');
+const imagePreview = document.getElementById('imagePreview');
+const submitBtn = document.getElementById('submitBtn');
+const modalEl = document.getElementById('detailModal');
+const modalContent = document.getElementById('modalContent');
+let selectedImages = [];
 
-function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(() => toastEl.classList.remove('show'), 2200); }
+function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(() => toastEl.classList.remove('show'), 2400); }
 function statusText(s){ return s==='pending'?'待审批':s==='approved'?'已通过':'未通过'; }
-function fmt(t){ return new Date(t).toLocaleString('zh-CN',{hour12:false}); }
+function fmt(t){ return t?new Date(t).toLocaleString('zh-CN',{hour12:false}):'-'; }
 function esc(s=''){ return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+function safeImageSrc(src=''){ return /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(src) ? src : ''; }
+
+function updateLoveCounter(){
+  const now = new Date();
+  const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const startUtc = Date.UTC(2026, 8, 30);
+  const days = Math.max(0, Math.floor((todayUtc - startUtc) / 86400000));
+  document.getElementById('loveDays').textContent = `第 ${days} 天`;
+}
+
+async function loadCategories(){
+  if(document.activeElement === categoryEl) return;
+  const current = categoryEl.value;
+  try {
+    const res = await fetch('/api/categories', {cache:'no-store'});
+    const items = await res.json();
+    if(!res.ok) throw new Error(items.message || '加载失败');
+    categoryEl.innerHTML = '<option value="">请选择</option>' + items.map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join('');
+    if(items.includes(current)) categoryEl.value = current;
+  } catch {
+    if(!categoryEl.options.length || categoryEl.options[0].textContent.includes('正在加载')){
+      categoryEl.innerHTML = '<option value="">申请类型加载失败，请刷新页面</option>';
+    }
+  }
+}
 
 async function loadApplications(){
   try {
-    const res = await fetch('/api/applications');
+    const res = await fetch('/api/applications', {cache:'no-store'});
     const items = await res.json();
     renderStats(items);
     renderList(items);
@@ -77,23 +130,109 @@ function renderList(items){
   if(!items.length){ listEl.innerHTML='<div class="empty">还没有申请记录</div>'; return; }
   listEl.innerHTML = items.map(x => `<div class="item" onclick="showDetail('${x.id}')"><div class="item-top"><div><h3>${esc(x.title)}</h3><div class="meta">${esc(x.displayId)} · ${esc(x.category)} · ${fmt(x.createdAt)}</div></div><span class="badge ${x.status}">${statusText(x.status)}</span></div>${x.feedback?`<div class="feedback-box" style="margin-top:12px"><strong>审批反馈：</strong>${esc(x.feedback)}</div>`:''}</div>`).join('');
 }
-async function showDetail(id){
-  const res=await fetch('/api/applications/'+id); const x=await res.json();
-  const msg = `申请编号：${x.displayId}\n标题：${x.title}\n类型：${x.category}\n紧急程度：${x.urgency}\n状态：${statusText(x.status)}\n提交时间：${fmt(x.createdAt)}${x.reviewedAt?'\n审批时间：'+fmt(x.reviewedAt):''}\n\n申请内容：\n${x.details}${x.feedback?'\n\n审批理由：\n'+x.feedback:''}`;
-  alert(msg);
-}
 
-document.getElementById('applyForm').addEventListener('submit', async e => {
-  e.preventDefault();
-  const body = { title:title.value, category:category.value, urgency:urgency.value, contact:contact.value, details:details.value };
-  const res = await fetch('/api/applications', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-  const data = await res.json();
-  if(!res.ok){ toast(data.message || '提交失败'); return; }
-  e.target.reset(); toast(`申请 ${data.displayId} 已提交`); loadApplications();
+function imageGallery(images){
+  if(!images?.length) return '<div class="meta">未上传图片</div>';
+  return `<div class="detail-images">${images.map((src,i)=>{
+    const safe=safeImageSrc(src); if(!safe) return '';
+    return `<button type="button" class="detail-image-btn" onclick="openImage(${i})"><img src="${safe}" alt="申请图片 ${i+1}"></button>`;
+  }).join('')}</div>`;
+}
+let currentDetailImages = [];
+async function showDetail(id){
+  try {
+    const res=await fetch('/api/applications/'+id, {cache:'no-store'});
+    const x=await res.json();
+    if(!res.ok){ toast(x.message || '加载失败'); return; }
+    currentDetailImages = x.images || [];
+    modalContent.innerHTML = `
+      <h2 style="margin-top:0">${esc(x.title)}</h2>
+      <div class="detail-grid">
+        <div class="k">申请编号</div><div class="v"><strong>${esc(x.displayId)}</strong></div>
+        <div class="k">申请类型</div><div class="v">${esc(x.category)}</div>
+        <div class="k">紧急程度</div><div class="v">${esc(x.urgency)}</div>
+        <div class="k">当前状态</div><div class="v"><span class="badge ${x.status}">${statusText(x.status)}</span></div>
+        <div class="k">提交时间</div><div class="v">${fmt(x.createdAt)}</div>
+        <div class="k">申请内容</div><div class="v">${esc(x.details)}</div>
+        <div class="k">申请图片</div><div class="v">${imageGallery(currentDetailImages)}</div>
+      </div>
+      ${x.feedback?`<div class="divider"></div><div class="feedback-box"><strong>审批理由：</strong>${esc(x.feedback)}<br><strong>审批时间：</strong>${fmt(x.reviewedAt)}</div>`:''}`;
+    modalEl.classList.add('show'); modalEl.setAttribute('aria-hidden','false');
+  } catch { toast('详情加载失败'); }
+}
+function closeModal(){ modalEl.classList.remove('show'); modalEl.setAttribute('aria-hidden','true'); }
+function openImage(index){
+  const src=safeImageSrc(currentDetailImages[index]); if(!src) return;
+  document.getElementById('lightboxImage').src=src;
+  document.getElementById('imageLightbox').classList.add('show');
+}
+function closeImage(){ document.getElementById('imageLightbox').classList.remove('show'); document.getElementById('lightboxImage').src=''; }
+
+function loadImageElement(file){
+  return new Promise((resolve,reject)=>{
+    const url=URL.createObjectURL(file); const img=new Image();
+    img.onload=()=>{ URL.revokeObjectURL(url); resolve(img); };
+    img.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error('图片读取失败')); };
+    img.src=url;
+  });
+}
+function canvasData(img, maxSide, quality){
+  const ratio=Math.min(1, maxSide/Math.max(img.naturalWidth||img.width, img.naturalHeight||img.height));
+  const w=Math.max(1,Math.round((img.naturalWidth||img.width)*ratio));
+  const h=Math.max(1,Math.round((img.naturalHeight||img.height)*ratio));
+  const canvas=document.createElement('canvas'); canvas.width=w; canvas.height=h;
+  const ctx=canvas.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(img,0,0,w,h);
+  return canvas.toDataURL('image/jpeg',quality);
+}
+async function compressImage(file){
+  if(!file.type.startsWith('image/')) throw new Error('请选择图片文件');
+  if(file.size > 15*1024*1024) throw new Error('原图超过 15MB，请选择更小的图片');
+  const img=await loadImageElement(file);
+  const attempts=[[1280,.78],[1280,.64],[1080,.58],[900,.55],[760,.5]];
+  for(const [side,q] of attempts){
+    const data=canvasData(img,side,q);
+    if(data.length <= 450000) return data;
+  }
+  throw new Error('图片压缩后仍然过大，请选择尺寸更小的图片');
+}
+function renderImagePreview(){
+  imagePreview.innerHTML=selectedImages.map((src,i)=>`<div class="preview-image"><img src="${src}" alt="待上传图片 ${i+1}"><button type="button" onclick="removeImage(${i})">×</button></div>`).join('');
+}
+function removeImage(index){ selectedImages.splice(index,1); renderImagePreview(); }
+function clearImages(){ selectedImages=[]; imageInput.value=''; renderImagePreview(); }
+
+imageInput.addEventListener('change', async ()=>{
+  const files=[...imageInput.files];
+  if(!files.length) return;
+  if(selectedImages.length + files.length > 3){ toast('最多上传 3 张图片'); imageInput.value=''; return; }
+  imageInput.disabled=true; toast('正在压缩图片…');
+  try {
+    for(const file of files) selectedImages.push(await compressImage(file));
+    renderImagePreview(); toast(`已准备 ${selectedImages.length} 张图片`);
+  } catch(e){ toast(e.message || '图片处理失败'); }
+  finally { imageInput.disabled=false; imageInput.value=''; }
 });
 
+document.getElementById('applyForm').addEventListener('reset', ()=>setTimeout(clearImages,0));
+document.getElementById('applyForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  submitBtn.disabled=true; submitBtn.textContent='正在提交…';
+  const body = { title:title.value, category:category.value, urgency:urgency.value, contact:contact.value, details:details.value, images:selectedImages };
+  try {
+    const res = await fetch('/api/applications', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const data = await res.json();
+    if(!res.ok){ toast(data.message || '提交失败'); if((data.message||'').includes('申请类型')) loadCategories(); return; }
+    e.target.reset(); clearImages(); toast(`申请 ${data.displayId} 已提交`); loadApplications();
+  } catch { toast('提交失败，请检查网络'); }
+  finally { submitBtn.disabled=false; submitBtn.textContent='提交申请'; }
+});
+
+updateLoveCounter();
+loadCategories();
 loadApplications();
 setInterval(loadApplications, 3000);
+setInterval(loadCategories, 30000);
+setInterval(updateLoveCounter, 60000);
 </script>
 </body>
 </html>

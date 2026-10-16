@@ -16,13 +16,17 @@
 
   <main class="container">
     <section class="hero">
+      <div class="love-counter" aria-live="polite">
+        <span class="heart">♥</span>
+        <div><div class="love-label">今天是爱老婆的</div><strong id="loveDays">第 0 天</strong><div class="love-since">从 2026 年 9 月 30 日开始</div></div>
+      </div>
       <h1>申请审核工作台</h1>
       <p>查看蔡朋成提交的申请，填写审核理由并选择“审核通过”或“审核不通过”。</p>
     </section>
 
     <section class="grid">
       <div class="card">
-        <div class="card-header"><h2>申请列表</h2><p>优先显示待审批申请，每 3 秒自动刷新。</p></div>
+        <div class="card-header"><h2>申请列表</h2><p>优先显示待审批申请，每 3 秒自动刷新列表；正在填写的审核理由不会被刷新打断。</p></div>
         <div class="card-body"><div id="stats" class="status-counts"></div><div class="divider"></div><div id="applicationList" class="list"></div></div>
       </div>
 
@@ -31,28 +35,67 @@
         <div class="card-body" id="detailArea"><div class="empty">请选择一条申请</div></div>
       </div>
     </section>
+
+    <section class="card manage-card">
+      <div class="card-header"><h2>申请类型管理</h2><p>新增或删除申请类型。修改后，蔡朋成申请端会自动同步。</p></div>
+      <div class="card-body">
+        <div class="category-add-row">
+          <input id="newCategory" maxlength="40" placeholder="例如：出行申请" />
+          <button class="btn btn-primary" type="button" onclick="addCategory()">增加类型</button>
+        </div>
+        <div id="categoryList" class="category-chips"></div>
+        <p class="small">删除类型不会改变历史申请中已经保存的类型，只会影响之后的新申请。</p>
+      </div>
+    </section>
   </main>
+
+  <div id="imageLightbox" class="lightbox" onclick="closeImage()"><img id="lightboxImage" alt="申请图片预览" /></div>
   <div id="toast" class="toast"></div>
 
 <script>
 let selectedId = null;
 let cache = [];
+let selectedFullItem = null;
+const feedbackDrafts = {};
 const listEl = document.getElementById('applicationList');
 const detailEl = document.getElementById('detailArea');
 const statsEl = document.getElementById('stats');
 const toastEl = document.getElementById('toast');
-function toast(msg){ toastEl.textContent=msg; toastEl.classList.add('show'); setTimeout(()=>toastEl.classList.remove('show'),2200); }
+const categoryListEl = document.getElementById('categoryList');
+let currentDetailImages = [];
+
+function toast(msg){ toastEl.textContent=msg; toastEl.classList.add('show'); setTimeout(()=>toastEl.classList.remove('show'),2400); }
 function statusText(s){ return s==='pending'?'待审批':s==='approved'?'已通过':'未通过'; }
 function fmt(t){ return t?new Date(t).toLocaleString('zh-CN',{hour12:false}):'-'; }
 function esc(s=''){ return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+function safeImageSrc(src=''){ return /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(src) ? src : ''; }
+
+function updateLoveCounter(){
+  const now = new Date();
+  const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const startUtc = Date.UTC(2026, 8, 30);
+  const days = Math.max(0, Math.floor((todayUtc - startUtc) / 86400000));
+  document.getElementById('loveDays').textContent = `第 ${days} 天`;
+}
 
 async function loadApplications(){
   try {
-    const res = await fetch('/api/applications');
+    const previousStatuses = new Map(cache.map(x=>[x.id,x.status]));
+    const res = await fetch('/api/applications', {cache:'no-store'});
     cache = await res.json();
     cache.sort((a,b) => (a.status==='pending'?0:1)-(b.status==='pending'?0:1) || new Date(b.createdAt)-new Date(a.createdAt));
-    renderStats(cache); renderList(cache);
-    if(selectedId){ const current=cache.find(x=>x.id===selectedId); if(current) renderDetail(current); }
+    renderStats(cache);
+    renderList(cache);
+
+    // 关键改进：3 秒轮询只刷新列表和统计，不重建审核详情。
+    // 因此 textarea 不会失焦，iPad/iPhone 输入法不会被强制关闭，草稿也不会丢失。
+    if(selectedId){
+      const current=cache.find(x=>x.id===selectedId);
+      const oldStatus=previousStatuses.get(selectedId);
+      if(current && oldStatus && oldStatus!==current.status && document.activeElement?.id!=='feedback'){
+        await refreshSelectedDetail();
+      }
+    }
   } catch { listEl.innerHTML='<div class="empty">暂时无法连接服务器</div>'; }
 }
 function renderStats(items){
@@ -63,9 +106,34 @@ function renderList(items){
   if(!items.length){ listEl.innerHTML='<div class="empty">暂无申请</div>'; return; }
   listEl.innerHTML=items.map(x=>`<div class="item ${x.id===selectedId?'active':''}" onclick="selectItem('${x.id}')"><div class="item-top"><div><h3>${esc(x.title)}</h3><div class="meta">${esc(x.displayId)} · ${esc(x.category)}<br>${fmt(x.createdAt)}</div></div><span class="badge ${x.status}">${statusText(x.status)}</span></div></div>`).join('');
 }
-function selectItem(id){ selectedId=id; renderList(cache); const x=cache.find(i=>i.id===id); if(x) renderDetail(x); }
+
+async function selectItem(id){
+  if(selectedId && document.getElementById('feedback')) feedbackDrafts[selectedId]=document.getElementById('feedback').value;
+  selectedId=id;
+  renderList(cache);
+  await refreshSelectedDetail();
+}
+async function refreshSelectedDetail(){
+  if(!selectedId) return;
+  try{
+    const res=await fetch('/api/applications/'+selectedId,{cache:'no-store'});
+    const x=await res.json();
+    if(!res.ok){ toast(x.message||'详情加载失败'); return; }
+    selectedFullItem=x;
+    renderDetail(x);
+  }catch{ toast('详情加载失败'); }
+}
+function imageGallery(images){
+  if(!images?.length) return '<div class="meta">未上传图片</div>';
+  return `<div class="detail-images">${images.map((src,i)=>{
+    const safe=safeImageSrc(src); if(!safe) return '';
+    return `<button type="button" class="detail-image-btn" onclick="openImage(${i})"><img src="${safe}" alt="申请图片 ${i+1}"></button>`;
+  }).join('')}</div>`;
+}
 function renderDetail(x){
   const canReview=x.status==='pending';
+  currentDetailImages=x.images||[];
+  const draft=feedbackDrafts[x.id] ?? '';
   detailEl.innerHTML=`
     <div class="detail-grid">
       <div class="k">申请编号</div><div class="v"><strong>${esc(x.displayId)}</strong></div>
@@ -77,10 +145,12 @@ function renderDetail(x){
       <div class="k">提交时间</div><div class="v">${fmt(x.createdAt)}</div>
       <div class="k">当前状态</div><div class="v"><span class="badge ${x.status}">${statusText(x.status)}</span></div>
       <div class="k">申请内容</div><div class="v">${esc(x.details)}</div>
+      <div class="k">申请图片</div><div class="v">${imageGallery(currentDetailImages)}</div>
     </div>
     <div class="divider"></div>
     ${canReview ? `
-      <div class="field"><label for="feedback">审核理由 *</label><textarea id="feedback" maxlength="2000" placeholder="请填写通过或不通过的具体理由，申请方将看到此反馈。"></textarea></div>
+      <div class="field"><label for="feedback">审核理由 *</label><textarea id="feedback" maxlength="2000" placeholder="请填写通过或不通过的具体理由，申请方将看到此反馈。">${esc(draft)}</textarea></div>
+      <div class="draft-hint">审核理由会在本页面自动暂存，列表刷新不会清空。</div>
       <div class="actions"><button class="btn btn-success" onclick="review('approved')">审核通过</button><button class="btn btn-danger" onclick="review('rejected')">审核不通过</button></div>
       <p class="small">审批完成后不可重复修改，避免产生冲突记录。</p>
     ` : `
@@ -88,20 +158,70 @@ function renderDetail(x){
     `}
     <div class="divider"></div>
     <h3 style="margin-top:0">流程记录</h3>
-    <div class="timeline">${x.timeline.map(t=>`<div class="timeline-row"><div class="dot"></div><div><strong>${esc(t.actor)}</strong> · ${fmt(t.at)}<div class="meta">${esc(t.note)}</div></div></div>`).join('')}</div>`;
+    <div class="timeline">${(x.timeline||[]).map(t=>`<div class="timeline-row"><div class="dot"></div><div><strong>${esc(t.actor)}</strong> · ${fmt(t.at)}<div class="meta">${esc(t.note)}</div></div></div>`).join('')}</div>`;
+
+  const feedbackEl=document.getElementById('feedback');
+  if(feedbackEl){ feedbackEl.addEventListener('input',()=>{ feedbackDrafts[x.id]=feedbackEl.value; }); }
 }
+
 async function review(decision){
   if(!selectedId) return;
   const feedback=document.getElementById('feedback')?.value.trim();
   if(!feedback){ toast('请先填写审核理由'); return; }
+  feedbackDrafts[selectedId]=feedback;
   const label=decision==='approved'?'通过':'不通过';
   if(!confirm(`确定将该申请审核为“${label}”吗？`)) return;
   const res=await fetch('/api/applications/'+selectedId+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision,feedback})});
   const data=await res.json();
   if(!res.ok){ toast(data.message||'审核失败'); return; }
-  toast(`审核完成：${label}`); await loadApplications();
+  delete feedbackDrafts[selectedId];
+  toast(`审核完成：${label}`);
+  await loadApplications();
+  await refreshSelectedDetail();
 }
-loadApplications(); setInterval(loadApplications,3000);
+
+function openImage(index){
+  const src=safeImageSrc(currentDetailImages[index]); if(!src) return;
+  document.getElementById('lightboxImage').src=src;
+  document.getElementById('imageLightbox').classList.add('show');
+}
+function closeImage(){ document.getElementById('imageLightbox').classList.remove('show'); document.getElementById('lightboxImage').src=''; }
+
+async function loadCategories(){
+  try{
+    const res=await fetch('/api/categories',{cache:'no-store'});
+    const items=await res.json();
+    if(!res.ok) throw new Error(items.message||'加载失败');
+    if(!items.length){ categoryListEl.innerHTML='<div class="empty">当前没有申请类型，请先添加</div>'; return; }
+    categoryListEl.innerHTML=items.map(name=>`<div class="category-chip"><span>${esc(name)}</span><button type="button" data-category="${encodeURIComponent(name)}" aria-label="删除 ${esc(name)}">删除</button></div>`).join('');
+    categoryListEl.querySelectorAll('button[data-category]').forEach(btn=>{
+      btn.addEventListener('click',()=>deleteCategory(decodeURIComponent(btn.dataset.category)));
+    });
+  }catch{ categoryListEl.innerHTML='<div class="empty">申请类型加载失败</div>'; }
+}
+async function addCategory(){
+  const input=document.getElementById('newCategory');
+  const name=input.value.trim();
+  if(!name){ toast('请输入申请类型名称'); return; }
+  const res=await fetch('/api/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  const data=await res.json();
+  if(!res.ok){ toast(data.message||'增加失败'); return; }
+  input.value=''; toast(`已增加“${name}”`); loadCategories();
+}
+async function deleteCategory(name){
+  if(!confirm(`确定删除申请类型“${name}”吗？\n历史申请不会受到影响。`)) return;
+  const res=await fetch('/api/categories/'+encodeURIComponent(name),{method:'DELETE'});
+  const data=await res.json();
+  if(!res.ok){ toast(data.message||'删除失败'); return; }
+  toast(`已删除“${name}”`); loadCategories();
+}
+document.getElementById('newCategory').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); addCategory(); } });
+
+updateLoveCounter();
+loadApplications();
+loadCategories();
+setInterval(loadApplications,3000);
+setInterval(updateLoveCounter,60000);
 </script>
 </body>
 </html>
